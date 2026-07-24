@@ -3,6 +3,7 @@ import { ConfigModule } from '@nestjs/config';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { validate } from './config/env.validation';
+import { PaymentsModule } from './payments/payments.module';
 import { QueueModule } from './queue/queue.module';
 
 @Module({
@@ -12,6 +13,7 @@ import { QueueModule } from './queue/queue.module';
       validate,
     }),
     QueueModule,
+    PaymentsModule,
   ],
   controllers: [AppController],
   providers: [AppService],
