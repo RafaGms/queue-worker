@@ -1,7 +1,8 @@
 import { BullModule } from '@nestjs/bullmq';
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
-import { PAYMENTS_QUEUE } from './queue.constants';
+import { DlqProcessor } from './dlq.processor';
+import { PAYMENTS_DLQ, PAYMENTS_QUEUE } from './queue.constants';
 
 @Module({
   imports: [
@@ -24,7 +25,9 @@ import { PAYMENTS_QUEUE } from './queue.constants';
         removeOnFail: false,
       },
     }),
+    BullModule.registerQueue({ name: PAYMENTS_DLQ }),
   ],
+  providers: [DlqProcessor],
   exports: [BullModule],
 })
 export class QueueModule {}
