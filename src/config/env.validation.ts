@@ -1,5 +1,5 @@
 import { plainToInstance } from 'class-transformer';
-import { IsEnum, IsInt, IsString, Max, Min, validateSync } from 'class-validator';
+import { IsEnum, IsInt, IsNumber, IsString, Max, Min, validateSync } from 'class-validator';
 
 export enum Environment {
   Development = 'development',
@@ -23,6 +23,11 @@ export class EnvironmentVariables {
   @Min(1)
   @Max(65535)
   REDIS_PORT: number = 6379;
+
+  @IsNumber()
+  @Min(0)
+  @Max(1)
+  GATEWAY_FAILURE_RATE: number = 0.3;
 }
 
 export function validate(config: Record<string, unknown>): EnvironmentVariables {
