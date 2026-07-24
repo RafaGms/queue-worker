@@ -15,7 +15,15 @@ import { PAYMENTS_QUEUE } from './queue.constants';
         },
       }),
     }),
-    BullModule.registerQueue({ name: PAYMENTS_QUEUE }),
+    BullModule.registerQueue({
+      name: PAYMENTS_QUEUE,
+      defaultJobOptions: {
+        attempts: 5,
+        backoff: { type: 'exponential', delay: 1000 },
+        removeOnComplete: 1000,
+        removeOnFail: false,
+      },
+    }),
   ],
   exports: [BullModule],
 })
