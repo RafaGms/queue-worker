@@ -2,7 +2,9 @@ import { BullModule } from '@nestjs/bullmq';
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { DlqProcessor } from './dlq.processor';
+import { IdempotencyService } from './idempotency.service';
 import { PAYMENTS_DLQ, PAYMENTS_QUEUE } from './queue.constants';
+import { RedisClient } from './redis.client';
 
 @Module({
   imports: [
@@ -27,7 +29,7 @@ import { PAYMENTS_DLQ, PAYMENTS_QUEUE } from './queue.constants';
     }),
     BullModule.registerQueue({ name: PAYMENTS_DLQ }),
   ],
-  providers: [DlqProcessor],
-  exports: [BullModule],
+  providers: [DlqProcessor, RedisClient, IdempotencyService],
+  exports: [BullModule, IdempotencyService],
 })
 export class QueueModule {}

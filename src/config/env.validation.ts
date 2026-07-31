@@ -28,6 +28,10 @@ export class EnvironmentVariables {
   @Min(0)
   @Max(1)
   GATEWAY_FAILURE_RATE: number = 0.3;
+
+  @IsInt()
+  @Min(1)
+  IDEMPOTENCY_TTL: number = 86400;
 }
 
 export function validate(config: Record<string, unknown>): EnvironmentVariables {
