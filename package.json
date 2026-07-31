@@ -1,7 +1,7 @@
 {
   "name": "queue-worker",
-  "version": "0.0.1",
-  "description": "",
+  "version": "1.0.0",
+  "description": "Async payment processing with NestJS and BullMQ",
   "author": "",
   "private": true,
   "license": "UNLICENSED",
