@@ -1,6 +1,9 @@
-import { IsInt, IsPositive, IsString, Length } from 'class-validator';
+import { IsInt, IsPositive, IsString, IsUUID, Length } from 'class-validator';
 
 export class CreatePaymentDto {
+  @IsUUID()
+  eventId!: string;
+
   @IsInt()
   @IsPositive()
   amount!: number;

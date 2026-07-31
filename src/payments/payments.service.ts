@@ -14,6 +14,7 @@ export class PaymentsService {
 
     await this.queue.add(PROCESS_PAYMENT_JOB, {
       paymentId,
+      eventId: dto.eventId,
       amount: dto.amount,
       currency: dto.currency,
     });
