@@ -1,3 +1,6 @@
+import { BullMQAdapter } from '@bull-board/api/bullMQAdapter';
+import { ExpressAdapter } from '@bull-board/express';
+import { BullBoardModule } from '@bull-board/nestjs';
 import { BullModule } from '@nestjs/bullmq';
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
@@ -28,6 +31,14 @@ import { RedisClient } from './redis.client';
       },
     }),
     BullModule.registerQueue({ name: PAYMENTS_DLQ }),
+    BullBoardModule.forRoot({
+      route: '/admin/queues',
+      adapter: ExpressAdapter,
+    }),
+    BullBoardModule.forFeature(
+      { name: PAYMENTS_QUEUE, adapter: BullMQAdapter },
+      { name: PAYMENTS_DLQ, adapter: BullMQAdapter },
+    ),
   ],
   providers: [DlqProcessor, RedisClient, IdempotencyService],
   exports: [BullModule, IdempotencyService],
