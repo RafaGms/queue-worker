@@ -1,29 +1,33 @@
 # queue-worker
 
-API em NestJS que enfileira pagamentos e os processa de forma assíncrona com BullMQ, lidando com falha, reprocessamento, duplicidade e visibilidade operacional.
+Um serviço em NestJS que recebe pagamentos e processa cada um numa fila com BullMQ, em vez de resolver tudo dentro da requisição. Montei pra estudar de perto os problemas que aparecem quando você tira o processamento do fluxo síncrono: o que fazer quando o gateway falha, como não cobrar o mesmo pagamento duas vezes e como enxergar o que está rolando com os jobs.
 
-![Painel do Bull Board mostrando a fila de pagamentos com jobs concluídos e falhados e a dead-letter queue](docs/bull-board.png)
+O gateway aqui é fake e falha de propósito parte das vezes, justamente pra esses casos acontecerem.
+
+![Painel do Bull Board com a fila de pagamentos (jobs concluídos e falhados) e a dead-letter queue](docs/bull-board.png)
 
 ## Stack
 
 - NestJS + TypeScript
 - BullMQ + Redis
-- Bull Board (painel em `/admin/queues`)
-- Swagger (`/docs`)
-- Docker Compose (Redis)
-- Jest + Supertest
+- Bull Board pro painel das filas (`/admin/queues`)
+- Swagger pra documentação da API (`/docs`)
+- Docker Compose pro Redis
+- Jest + Supertest nos testes
 
-## Decisões de arquitetura
+## Como funciona e por quê
 
-**Por que fila em vez de processamento síncrono?** Cobrar um pagamento depende de um gateway externo, lento e sujeito a falha. Fazer isso dentro do request HTTP prende a conexão do cliente durante toda a chamada e transforma qualquer instabilidade do gateway em erro na cara do usuário. Enfileirando, a API responde 202 na hora e o trabalho pesado roda em background, onde pode ser retentado sem o cliente perceber. A fila ainda dá controle de vazão: um pico de mil pagamentos espera a vez em vez de derrubar o gateway.
+O caminho de um pagamento é curto: chega no `POST /payments`, a API valida, joga um job na fila e responde 202 na hora. Quem faz o trabalho de verdade é um worker separado, que puxa o job e chama o gateway.
 
-**Por que backoff exponencial e não retry imediato?** A maioria das falhas de gateway é transitória — timeout, indisponibilidade momentânea, rate limit. Retentar no mesmo instante só empilha carga sobre um serviço que já está sofrendo, e costuma falhar de novo. O backoff exponencial (1s, 2s, 4s, 8s) espaça as tentativas, dá tempo de o gateway se recuperar e evita efeito manada quando muitos jobs falham juntos.
+Coloquei fila no meio porque cobrar depende de um serviço externo, lento e que pode cair. Se isso rodasse dentro da requisição, o cliente ficaria preso esperando o gateway e qualquer lentidão dele viraria erro na tela. Com a fila, a resposta sai na hora e o resto acontece atrás, onde dá pra tentar de novo sem ninguém ver.
 
-**Por que dead-letter queue em vez de descartar o job?** Um pagamento que falhou cinco vezes ainda é um pagamento. Descartar é perder dinheiro e o rastro do que aconteceu. A DLQ tira o job do fluxo principal — que não pode ficar travado — mas preserva o payload e o motivo da última falha, prontos para inspeção ou reprocessamento manual. É a diferença entre "sumiu" e "está aqui, parado, com o erro anotado".
+Quando o gateway falha, o job não morre na primeira tentativa: são cinco, com backoff exponencial (1s, 2s, 4s, 8s). Fui de backoff em vez de tentar na hora porque quase toda falha de gateway é passageira, tipo um timeout ou um pico de indisponibilidade. Repetir no mesmo segundo só bate de novo num serviço que já está mal; esperar um pouco entre as tentativas dá margem pra ele voltar.
 
-**Por que idempotência é obrigatória em fila?** BullMQ, como toda fila séria, entrega pelo menos uma vez (at-least-once): um job pode rodar mais de uma vez se o worker cai no meio, se há reentrega ou se o cliente reenvia a requisição. Sem proteção, isso vira cobrança dupla. Cada pagamento carrega um `eventId`; antes de cobrar, o worker registra esse id e, se já o viu, pula o processamento. A cobrança acontece uma vez, não importa quantas vezes o job seja executado.
+Esgotadas as cinco, o job vai pra uma segunda fila, a `payments-dlq` (dead-letter queue), levando junto o motivo da última falha e quantas vezes tentou. Preferi isso a descartar o job. Um pagamento que falhou não pode simplesmente sumir; na DLQ ele fica parado, fora do caminho principal, mas ainda inteiro pra eu olhar depois ou reprocessar na mão.
 
-**Por que `SET NX` e não checagem em duas etapas?** A tentação é fazer um `GET` para ver se o `eventId` existe e, se não, um `SET`. Mas entre o `GET` e o `SET` dois workers podem ler "não existe" e ambos processarem — condição de corrida. `SET key value NX` é atômico: o Redis só grava se a chave ainda não existe e devolve numa única operação quem ganhou a disputa. Não há janela entre checar e gravar.
+A parte que mais me interessava era a idempotência. Fila entrega "pelo menos uma vez": o mesmo job pode rodar duas vezes se o worker cai no meio, se tem reentrega, ou se o cliente reenvia a requisição. Num sistema de pagamento, isso é cobrança dobrada. Então cada requisição manda um `eventId` (um UUID), e antes de cobrar o worker tenta registrar esse id no Redis com `SET eventId NX`. Se gravou, é a primeira vez e ele processa; se não gravou, é porque já passou por ali e ele pula.
+
+Usei `SET NX` de propósito, e não um `GET` pra checar seguido de um `SET`. Com duas operações separadas fica uma brecha no meio: dois workers leem "não existe" ao mesmo tempo e os dois cobram. O `NX` resolve isso porque é atômico — o Redis decide num passo só quem gravou primeiro.
 
 ## Como rodar
 
@@ -36,15 +40,15 @@ npm run start:dev
 
 ## Endpoints
 
-| Método | Rota | Descrição |
+| Método | Rota | O que faz |
 |---|---|---|
-| POST | `/payments` | Enfileira um pagamento e retorna 202 |
-| GET | `/admin/queues` | Painel do Bull Board (filas e DLQ) |
-| GET | `/docs` | Documentação Swagger da API |
+| POST | `/payments` | Enfileira um pagamento e responde 202 |
+| GET | `/admin/queues` | Painel do Bull Board com as filas e a DLQ |
+| GET | `/docs` | Documentação Swagger |
 
-## Exemplo de fluxo
+## Testando na mão
 
-Enfileirar um pagamento. O `eventId` é um UUID gerado pelo cliente e serve de chave de idempotência:
+Enfileirar um pagamento (o `eventId` é um UUID que você gera no cliente):
 
 ```bash
 curl -X POST http://localhost:3000/payments \
@@ -54,18 +58,20 @@ curl -X POST http://localhost:3000/payments \
 # {"paymentId":"...","status":"queued"}
 ```
 
-Reenviar o mesmo `eventId` enfileira outro job, mas o worker pula o processamento por já ter visto o evento — o pagamento é cobrado uma vez só.
+Manda a mesma requisição de novo, com o mesmo `eventId`: entra outro job na fila, mas o worker vê que já processou aquele evento e pula. Cobra uma vez só.
 
-Para ver um job cair na dead-letter queue, suba a API com o gateway sempre falhando:
+Pra forçar um job até a DLQ, sobe a API com o gateway falhando sempre:
 
 ```bash
 GATEWAY_FAILURE_RATE=1 npm run start:dev
 ```
 
-Qualquer pagamento enfileirado vai falhar, ser retentado cinco vezes com backoff exponencial e, esgotadas as tentativas, aparecer na fila `payments-dlq` com o motivo da falha. Acompanhe tudo em `/admin/queues`.
+Aí qualquer pagamento vai falhar as cinco vezes e parar na `payments-dlq` com o motivo. Dá pra acompanhar tudo ao vivo no painel em `/admin/queues`.
 
-## Próximos passos
+## O que ficou de fora
 
-- Persistir o resultado dos pagamentos num banco de dados. Hoje o que sobra é o estado das filas no Redis, não um histórico consultável.
-- Endpoint para reprocessar jobs da DLQ, que por enquanto só são inspecionáveis pelo painel.
-- Autenticação em `/payments` e `/admin/queues`. A API e o painel estão abertos.
+Coisas que eu deixaria pra uma próxima:
+
+- Guardar o resultado dos pagamentos num banco. Hoje o histórico é só o estado das filas no Redis, não dá pra consultar direito.
+- Um endpoint pra reprocessar o que está na DLQ; por enquanto só dá pra olhar pelo painel.
+- Proteger `/payments` e `/admin/queues`, que hoje estão abertos.
